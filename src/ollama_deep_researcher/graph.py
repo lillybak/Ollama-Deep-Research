@@ -20,6 +20,7 @@ from ollama_deep_researcher.utils import (
     strip_thinking_tokens,
     get_config_value,
 )
+from ollama_deep_researcher.rag import create_rag_system
 from ollama_deep_researcher.state import (
     SummaryState,
     SummaryStateInput,
@@ -262,6 +263,122 @@ def web_research(state: SummaryState, config: RunnableConfig):
     }
 
 
+def rag_search(state: SummaryState, config: RunnableConfig):
+    """LangGraph node that performs RAG search using the DnD knowledge base.
+
+    Searches the Qdrant vector database for relevant DnD documents based on the
+    generated search query, providing foundational knowledge from the document collection.
+
+    Args:
+        state: Current graph state containing the search query
+        config: Configuration for the runnable (not used for RAG currently)
+
+    Returns:
+        Dictionary with state update, including rag_research_results and sources_gathered
+    """
+    try:
+        # Initialize RAG system
+        rag = create_rag_system()
+        
+        # Search for relevant documents
+        search_results = rag.search_documents(state.search_query, top_k=5)
+        
+        # Format results for LLM consumption
+        formatted_results = rag.format_search_results(search_results)
+        
+        # Format sources for final output
+        sources = []
+        for doc in search_results:
+            source_info = f"Source: {doc['metadata'].get('source', 'DnD Knowledge Base')} (Score: {doc['metadata'].get('score', 0):.3f})"
+            sources.append(source_info)
+        
+        return {
+            "rag_research_results": [formatted_results],
+            "sources_gathered": ["\n".join(sources)] if sources else ["DnD Knowledge Base - No specific sources found"],
+        }
+        
+    except Exception as e:
+        # Fallback if RAG fails
+        error_msg = f"RAG search failed: {str(e)}"
+        return {
+            "rag_research_results": [f"RAG search encountered an error: {error_msg}"],
+            "sources_gathered": ["DnD Knowledge Base - Search Error"],
+        }
+
+
+def evaluate_rag_results(state: SummaryState, config: RunnableConfig):
+    """LangGraph node that evaluates whether RAG results are sufficient or need web supplementation.
+
+    Analyzes the RAG search results to determine if additional web research is needed
+    to provide comprehensive information on the research topic.
+
+    Args:
+        state: Current graph state containing RAG results and research topic
+        config: Configuration for the runnable
+
+    Returns:
+        Dictionary with state update (no changes needed, just routing decision)
+    """
+    # Get the most recent RAG results
+    if not state.rag_research_results:
+        # No RAG results, definitely need web research
+        return {}
+    
+    recent_rag = state.rag_research_results[-1]
+    
+    # Simple heuristics to determine if RAG results are sufficient
+    # You can make this more sophisticated with LLM evaluation if needed
+    rag_sufficient = (
+        len(recent_rag) > 200 and  # Has substantial content
+        "No relevant documents found" not in recent_rag and  # Found relevant docs
+        "Search Error" not in recent_rag  # No errors occurred
+    )
+    
+    # For now, we'll always proceed to web research for supplementation
+    # You can modify this logic based on your specific needs
+    return {}
+
+
+def route_after_rag(state: SummaryState, config: RunnableConfig) -> Literal["web_research", "summarize_sources"]:
+    """LangGraph routing function that determines whether to supplement RAG with web research.
+
+    Decides whether the RAG results are sufficient or if web research should be added
+    to provide more comprehensive information.
+
+    Args:
+        state: Current graph state containing RAG results
+        config: Configuration for the runnable
+
+    Returns:
+        String literal indicating the next node ("web_research" or "summarize_sources")
+    """
+    if not state.rag_research_results:
+        return "web_research"
+    
+    recent_rag = state.rag_research_results[-1]
+    
+    # Check if RAG results seem insufficient or contain errors
+    string_indicators = [
+        "No relevant documents found",
+        "Search Error", 
+        "RAG search failed"
+    ]
+    
+    # Check for string indicators and length separately
+    has_error_indicators = any(indicator in recent_rag for indicator in string_indicators)
+    is_too_short = len(recent_rag) < 200  # Increased threshold for more conservative approach
+    has_very_low_scores = len(recent_rag) < 50  # Only search web if results are really poor
+    
+    # Only trigger web search if RAG results are clearly insufficient
+    rag_critically_insufficient = has_error_indicators or has_very_low_scores
+    
+    if rag_critically_insufficient:
+        return "web_research"
+    else:
+        # RAG results are sufficient for D&D content, skip potentially irrelevant web research
+        return "summarize_sources"
+
+
 def summarize_sources(state: SummaryState, config: RunnableConfig):
     """LangGraph node that summarizes web research results.
 
@@ -280,20 +397,37 @@ def summarize_sources(state: SummaryState, config: RunnableConfig):
     # Existing summary
     existing_summary = state.running_summary
 
-    # Most recent web research
-    most_recent_web_research = state.web_research_results[-1]
+    # Combine RAG and web research results
+    context_sections = []
+    
+    # Add RAG results if available
+    if state.rag_research_results:
+        most_recent_rag = state.rag_research_results[-1]
+        context_sections.append(f"<DnD Knowledge Base>\n{most_recent_rag}\n</DnD Knowledge Base>")
+    
+    # Add web research results if available
+    if state.web_research_results:
+        most_recent_web_research = state.web_research_results[-1]
+        context_sections.append(f"<Web Research>\n{most_recent_web_research}\n</Web Research>")
+    
+    # Combine all context
+    combined_context = "\n\n".join(context_sections)
+    
+    # If no context available, fallback
+    if not combined_context:
+        combined_context = "No research context available."
 
     # Build the human message
     if existing_summary:
         human_message_content = (
-            f"<Existing Summary> \n {existing_summary} \n <Existing Summary>\n\n"
-            f"<New Context> \n {most_recent_web_research} \n <New Context>"
-            f"Update the Existing Summary with the New Context on this topic: \n <User Input> \n {state.research_topic} \n <User Input>\n\n"
+            f"<Existing Summary>\n{existing_summary}\n</Existing Summary>\n\n"
+            f"<New Context>\n{combined_context}\n</New Context>\n\n"
+            f"Update the Existing Summary with the New Context on this topic: \n<User Input>\n{state.research_topic}\n</User Input>\n\n"
         )
     else:
         human_message_content = (
-            f"<Context> \n {most_recent_web_research} \n <Context>"
-            f"Create a Summary using the Context on this topic: \n <User Input> \n {state.research_topic} \n <User Input>\n\n"
+            f"<Context>\n{combined_context}\n</Context>\n\n"
+            f"Create a Summary using the Context on this topic: \n<User Input>\n{state.research_topic}\n</User Input>\n\n"
         )
 
     # Run the LLM
@@ -449,14 +583,18 @@ builder = StateGraph(
     config_schema=Configuration,
 )
 builder.add_node("generate_query", generate_query)
+builder.add_node("rag_search", rag_search)
+builder.add_node("evaluate_rag_results", evaluate_rag_results)
 builder.add_node("web_research", web_research)
 builder.add_node("summarize_sources", summarize_sources)
 builder.add_node("reflect_on_summary", reflect_on_summary)
 builder.add_node("finalize_summary", finalize_summary)
 
-# Add edges
+# Add edges for RAG-first flow
 builder.add_edge(START, "generate_query")
-builder.add_edge("generate_query", "web_research")
+builder.add_edge("generate_query", "rag_search")
+builder.add_edge("rag_search", "evaluate_rag_results")
+builder.add_conditional_edges("evaluate_rag_results", route_after_rag)
 builder.add_edge("web_research", "summarize_sources")
 builder.add_edge("summarize_sources", "reflect_on_summary")
 builder.add_conditional_edges("reflect_on_summary", route_research)

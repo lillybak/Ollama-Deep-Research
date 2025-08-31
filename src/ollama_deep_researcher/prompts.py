@@ -6,22 +6,31 @@ def get_current_date():
     return datetime.now().strftime("%B %d, %Y")
 
 
-query_writer_instructions = """Your goal is to generate a targeted web search query.
+query_writer_instructions = """Your goal is to generate a targeted web search query specifically for Dungeons & Dragons (D&D) content.
 
 <CONTEXT>
 Current date: {current_date}
 Please ensure your queries account for the most current information available as of this date.
+IMPORTANT: Focus only on Dungeons & Dragons fantasy role-playing game content.
 </CONTEXT>
 
 <TOPIC>
 {research_topic}
 </TOPIC>
 
+<INSTRUCTIONS>
+- Generate web search queries specifically for Dungeons & Dragons content
+- Include "D&D" or "Dungeons and Dragons" in your queries when appropriate
+- Focus on game mechanics, rules, spells, monsters, classes, races, and equipment
+- Avoid medical, clinical, or real-world professional terminology
+- Target tabletop RPG and fantasy gaming resources
+</INSTRUCTIONS>
+
 <EXAMPLE>
 Example output:
 {{
-    "query": "machine learning transformer architecture explained",
-    "rationale": "Understanding the fundamental structure of transformer models"
+    "query": "D&D wizard spell slots 5th edition mechanics",
+    "rationale": "Understanding how spell slot mechanics work for wizard characters in D&D 5e"
 }}
 </EXAMPLE>"""
 
@@ -71,16 +80,19 @@ Think carefully about the provided Context first. Then generate a summary of the
 </Task>
 """
 
-reflection_instructions = """You are an expert research assistant analyzing a summary about {research_topic}.
+reflection_instructions = """You are an expert Dungeons & Dragons research assistant analyzing a summary about {research_topic}.
 
 <GOAL>
-1. Identify knowledge gaps or areas that need deeper exploration
-2. Generate a follow-up question that would help expand your understanding
-3. Focus on technical details, implementation specifics, or emerging trends that weren't fully covered
+1. Identify knowledge gaps or areas that need deeper exploration about D&D content
+2. Generate a follow-up question that would help expand understanding of D&D mechanics, rules, or lore
+3. Focus on game mechanics, rule interactions, character options, or D&D-specific details that weren't fully covered
 </GOAL>
 
 <REQUIREMENTS>
-Ensure the follow-up question is self-contained and includes necessary context for web search.
+- Ensure the follow-up question is self-contained and includes necessary context for web search
+- Focus exclusively on Dungeons & Dragons fantasy role-playing game content
+- Include "D&D" or "Dungeons and Dragons" in follow-up queries when appropriate
+- Avoid medical, clinical, or real-world professional terminology
 </REQUIREMENTS>"""
 
 json_mode_reflection_instructions = """<FORMAT>

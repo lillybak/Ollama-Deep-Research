@@ -162,23 +162,68 @@ def fetch_raw_content(url: str) -> Optional[str]:
         return None
 
 
+def is_dnd_related_content(title: str, content: str, url: str) -> bool:
+    """Check if search result content is related to Dungeons & Dragons.
+    
+    Args:
+        title: Result title
+        content: Result content/snippet  
+        url: Result URL
+        
+    Returns:
+        bool: True if content appears to be D&D related
+    """
+    # D&D-related terms to look for
+    dnd_terms = [
+        "dungeons", "dragons", "d&d", "dnd", "5e", "5th edition",
+        "wizard", "paladin", "rogue", "barbarian", "cleric", "druid",
+        "spell", "magic", "class", "race", "character", "monster",
+        "tabletop", "rpg", "role-playing", "dice", "campaign",
+        "dungeon master", "dm", "player character", "homebrew"
+    ]
+    
+    # Non-D&D domains/terms to avoid
+    blacklist_terms = [
+        "realtor", "real estate", "car.org", "california association",
+        "medical", "clinical", "osteopathic", "hospital", "doctor",
+        "legal", "law", "court", "finance", "banking", "stock",
+        "runescape", "world of warcraft", "wow", "final fantasy", "ff",
+        "pokemon", "digimon", "yu-gi-oh", "magic the gathering", "mtg"
+    ]
+    
+    # Combine title, content, and URL for checking
+    full_text = f"{title} {content} {url}".lower()
+    
+    # Check for blacklisted terms first
+    if any(term in full_text for term in blacklist_terms):
+        return False
+    
+    # Check for D&D terms
+    dnd_matches = sum(1 for term in dnd_terms if term in full_text)
+    
+    # Require at least 1 D&D term match
+    return dnd_matches >= 1
+
+
 @traceable
 def duckduckgo_search(
     query: str, max_results: int = 3, fetch_full_page: bool = False
 ) -> Dict[str, List[Dict[str, Any]]]:
     """
-    Search the web using DuckDuckGo and return formatted results.
+    Search the web using DuckDuckGo and return D&D-filtered results.
 
-    Uses the DDGS library to perform web searches through DuckDuckGo.
+    Uses the DDGS library to perform web searches through DuckDuckGo, then filters
+    results to ensure they are related to Dungeons & Dragons content. Automatically
+    enhances queries with D&D context and removes irrelevant results.
 
     Args:
         query (str): The search query to execute
-        max_results (int, optional): Maximum number of results to return. Defaults to 3.
+        max_results (int, optional): Maximum number of D&D-related results to return. Defaults to 3.
         fetch_full_page (bool, optional): Whether to fetch full page content from result URLs.
                                          Defaults to False.
     Returns:
         Dict[str, List[Dict[str, Any]]]: Search response containing:
-            - results (list): List of search result dictionaries, each containing:
+            - results (list): List of D&D-related search result dictionaries, each containing:
                 - title (str): Title of the search result
                 - url (str): URL of the search result
                 - content (str): Snippet/summary of the content
@@ -186,9 +231,13 @@ def duckduckgo_search(
                                             otherwise same as content
     """
     try:
+        # Enhance query with D&D context to improve relevance
+        enhanced_query = f"{query} D&D dungeons dragons tabletop RPG"
+        
         with DDGS() as ddgs:
             results = []
-            search_results = list(ddgs.text(query, max_results=max_results))
+            # Search for more results since we'll filter them
+            search_results = list(ddgs.text(enhanced_query, max_results=max_results * 3))
 
             for r in search_results:
                 url = r.get("href")
@@ -199,11 +248,16 @@ def duckduckgo_search(
                     print(f"Warning: Incomplete result from DuckDuckGo: {r}")
                     continue
 
+                # Filter out non-D&D content
+                if not is_dnd_related_content(title, content, url):
+                    print(f"Filtered out non-D&D result: {title[:50]}...")
+                    continue
+
                 raw_content = content
                 if fetch_full_page:
                     raw_content = fetch_raw_content(url)
 
-                # Add result to list
+                # Add D&D-related result to list
                 result = {
                     "title": title,
                     "url": url,
@@ -211,6 +265,10 @@ def duckduckgo_search(
                     "raw_content": raw_content,
                 }
                 results.append(result)
+                
+                # Stop once we have enough D&D results
+                if len(results) >= max_results:
+                    break
 
             return {"results": results}
     except Exception as e:
